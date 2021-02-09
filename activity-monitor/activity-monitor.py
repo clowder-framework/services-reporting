@@ -3,8 +3,37 @@
 import os
 import logging
 import json
+import yaml
 import pika
+from pymongo import MongoClient
 
+
+class MongoDBConnector():
+    def __init__(self):
+        logging.getLogger('__main__').setLevel(logging.DEBUG)
+
+        # MongoDB connection string
+        self.mongodb_uri = os.getenv('MONGODB_URI', None)
+
+        self.client = None
+
+    def connect(self):
+        self.client = MongoClient(self.mongodb_uri)
+        self.eventsink = self.client.eventsink
+
+    def insert(self, event_json):
+        logger = logging.getLogger("__main__")
+        try:
+            self.eventsink.events.insert_one(event_json)
+            return True
+        except Exception as e:
+            try:
+                self.connect()
+                self.eventsink.events.insert_one(event_json)
+                return True
+            except Exception as e2:
+                logger.debug("MongoDB Error: "+str(e2))
+                return False
 
 class ActivityMonitorDaemon():
     def __init__(self):
@@ -21,8 +50,7 @@ class ActivityMonitorDaemon():
         self.worker = None
         self.announcer = None
 
-        self.connect()
-        self.listen()
+        self.mongoclient = MongoDBConnector()
 
     # Connect to message broker
     def connect(self):
@@ -115,16 +143,16 @@ class ActivityMonitorDaemon():
         """
 
         try:
-            json_body = json.loads(self._decode_body(body))
+            json_body = yaml.safe_load(body)
             if 'routing_key' not in json_body and method.routing_key:
                 json_body['routing_key'] = method.routing_key
 
-            if 'jobid' not in json_body:
-                job_id = None
+            result = self.process(json_body)
+            if result:
+                channel.basic_ack(delivery_tag=method.delivery_tag)
             else:
-                job_id = json_body['jobid']
+                channel.basic_nack(delivery_tag=method.delivery_tag)
 
-            self.process(json_body)
 
         except ValueError:
             # something went wrong, move message to error queue and give up on this message immediately
@@ -132,11 +160,19 @@ class ActivityMonitorDaemon():
 
     # Process a specific message
     def process(self, message):
-        logger = logging.getLogger('__main__')
-        logger.debug(message)
-        logger.debug("Done.")
+        return self.mongoclient.insert(message)
+
+    def start(self):
+        logger = logging.getLogger("__main__")
+        logger.debug("Connecting to RabbitMQ...")
+        self.connect()
+        logger.debug("Connecting to MongoDB...")
+        self.mongoclient.connect()
+
+        self.listen()
 
 
+logging.basicConfig()
 if __name__ == "__main__":
     service = ActivityMonitorDaemon()
     service.start()

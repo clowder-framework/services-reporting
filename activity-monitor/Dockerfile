@@ -1,6 +1,11 @@
 FROM clowder/pyclowder:onbuild
 
-COPY extractor_info.json *.py  /home/clowder/
+RUN pip install pymongo
 
-ENV RABBITMQ_QUEUE="ncsa.activity.monitor" \
-    MAIN_SCRIPT="ncsa.activity.monitor.py"
+COPY *.py  /home/monitor/
+
+ENV RABBITMQ_EXCHANGE="clowder.metrics" \
+    RABBITMQ_KEY="event.sink" \
+    RABBITMQ_QUEUE="event.sink"
+
+CMD python /home/monitor/activity-monitor.py
